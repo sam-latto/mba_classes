@@ -1,0 +1,71 @@
+# -----------------------------------------------------------------------------
+# Python / Flask Project
+# -----------------------------------------------------------------------------
+
+# Byte-compiled / cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment directories
+.venv/
+venv/
+env/
+ENV/
+.mba_projects/
+.mba_env/
+
+# Anaconda / Conda environment folders
+anaconda3/
+conda/
+*.conda
+
+# Mac / Windows system files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs and runtime files
+*.log
+*.pid
+
+# Local configuration
+.env
+.env.*
+!.env.example  # Keep your example env checked in
+
+# Pytest / coverage
+.coverage
+htmlcov/
+.cache/
+.pytest_cache/
+nosetests.xml
+coverage.xml
+
+# VS Code
+.vscode/
+.code-workspace
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.spec
+
+# Notebooks checkpoints
+.ipynb_checkpoints
+
+# Supabase / temporary JSONs
+supabase/functions/.temp/
+.supabase/
+
+# Flask specific
+instance/
+*.db
+*.sqlite3
+*.sqlite
+
+# Render / Heroku deployment cache
+*.log
+*.pid
+*.bak
