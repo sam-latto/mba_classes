@@ -97,8 +97,19 @@ def search():
         r = requests.get(url, headers=headers, params=params, timeout=15)
         r.raise_for_status()
         rows = r.json()
+
+    except requests.HTTPError as e:
+        # Surface Supabase’s exact error text (e.g. invalid column/table)
+        detail = ""
+        try:
+            detail = r.text
+        except Exception:
+            pass
+        return err(f"Search failed (REST): {e} | {detail}", 500, int((time.time() - start) * 1000))
+
     except Exception as e:
         return err(f"Search failed (REST): {e}", 500, int((time.time() - start) * 1000))
+
 
     results = []
     for r_ in rows or []:
