@@ -6,7 +6,9 @@ from openai import OpenAI
 from flask_cors import CORS
 from dotenv import load_dotenv
 import re
-from services.supabase_client import get_supabase, get_table_name, search_courses_by_title
+from .services.supabase_client import (
+    get_supabase, get_table_name, search_courses_by_title
+)
 
 
 # --- App & Config ---
