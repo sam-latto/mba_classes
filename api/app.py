@@ -44,17 +44,24 @@ def health():
 def search():
     start = time.time()
 
-    # 1) Validate request
-    if not request.is_json:
-        return err("Request body must be JSON", status=400, took_ms=int((time.time()-start)*1000))
+    # 1) Parse JSON (fail loudly if not valid JSON)
+    try:
+        body = request.get_json(force=True, silent=False) or {}
+    except Exception:
+        return err("Request body must be valid JSON", status=400, took_ms=int((time.time()-start)*1000))
 
-    body = request.get_json(silent=True) or {}
-    query = (body.get("query") or "").strip()
-    k = body.get("k", 10)
+    # 2) Accept either "q" or "query"
+    q = (body.get("q") or body.get("query") or "").strip()
 
-    if not query:
-        return err("Missing or invalid 'query' field", status=400, took_ms=int((time.time()-start)*1000))
-    if not isinstance(k, int) or k < 1 or k > 25:
+    # 3) Validate k (coerce to int if passed as a string)
+    try:
+        k = int(body.get("k", 10))
+    except Exception:
+        k = -1  # force validation failure below
+
+    if not q:
+        return err("Missing or invalid 'query' (use 'q' or 'query')", status=400, took_ms=int((time.time()-start)*1000))
+    if not (1 <= k <= 25):
         return err("Invalid 'k' value (must be 1–25)", status=422, took_ms=int((time.time()-start)*1000))
 
     # 2) Query Supabase
