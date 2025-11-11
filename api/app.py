@@ -166,11 +166,11 @@ def recommend():
     body = request.get_json(silent=True) or {}
 
     # 2) Extract + validate fields
-    query = (body.get("query") or "").strip()
+    user_q = (body.get("q") or body.get("query") or "").strip()
     results = body.get("results")
     top_k = body.get("top_k", 3)
 
-    if not query:
+    if not user_q:
         return err("Missing or invalid 'query' field", status=400, took_ms=int((time.time()-start)*1000))
 
     if not isinstance(results, list):
@@ -238,7 +238,7 @@ def recommend():
     )
 
     user_prompt = (
-        f"query: {query}\n"
+        f"query: {user_q}\n"
         f"top_k: {top_k}\n"
         f"CANDIDATES(JSON): {candidates_json}\n\n"
         "Return ONLY JSON. No prose."
