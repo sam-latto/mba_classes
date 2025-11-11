@@ -161,23 +161,39 @@ def recommend():
     start = time.time()
 
     # 1) Validate JSON
-    if not request.is_json:
-        return err("Request body must be JSON", status=400, took_ms=int((time.time()-start)*1000))
-    body = request.get_json(silent=True) or {}
+   # Parse JSON
+    try:
+        body = request.get_json(force=True, silent=False) or {}
+    except Exception:
+        return err("Request body must be valid JSON", 400, int((time.time()-start)*1000))
 
-    # 2) Extract + validate fields
+    # Accept either "q" or "query"
     user_q = (body.get("q") or body.get("query") or "").strip()
+
+    # Accept either "courses" (list of IDs) OR "results" (list of objects with course_id)
+    courses = body.get("courses")
     results = body.get("results")
-    top_k = body.get("top_k", 3)
 
+    course_ids = []
+    if isinstance(courses, list) and all(isinstance(x, str) for x in courses):
+        course_ids = courses
+    elif isinstance(results, list):
+        for item in results:
+            if isinstance(item, dict) and "course_id" in item and isinstance(item["course_id"], str):
+                course_ids.append(item["course_id"])
+
+
+    try:
+        top_k = int(body.get("top_k", 5))
+    except Exception:
+        top_k = 5
+    top_k = max(1, min(top_k, 25))  # keep between 1–25
+
+    # Validate
     if not user_q:
-        return err("Missing or invalid 'query' field", status=400, took_ms=int((time.time()-start)*1000))
-
-    if not isinstance(results, list):
-        return err("Missing or invalid 'results' field", status=400, took_ms=int((time.time()-start)*1000))
-
-    if not isinstance(top_k, int) or top_k < 1 or top_k > 10:
-        return err("Invalid 'top_k' value (must be 1–10)", status=422, took_ms=int((time.time()-start)*1000))
+        return err("Missing or invalid 'q'/'query'", 400, int((time.time()-start)*1000))
+    if not course_ids:
+        return err("Missing or invalid 'courses' or 'results' (need course IDs)", 400, int((time.time()-start)*1000))
 
     # 3) Normalize candidates (only keep the fields we need)
     candidates = []
