@@ -88,7 +88,7 @@ def search():
         "Prefer": "return=minimal",
     }
     params = {
-        "select": "course_id,title,instructor,credits",
+        "select": "course_id,title,description",
         "title": f"ilike.*{q}*",
         "limit": k,
     }
@@ -118,7 +118,7 @@ def search():
             "title": r_.get("title"),
             "score": 1.0,
             "reasons": [],
-            "metadata": {"instructor": r_.get("instructor"), "credits": r_.get("credits")},
+            "metadata": {"description": r_.get("description")},
         })
 
 
@@ -223,8 +223,8 @@ def recommend():
                 "course_id": cid,
                 "title": title,
                 # keep only small, useful bits
-                "instructor": md.get("instructor"),
-                "credits": md.get("credits"),
+                # "instructor": md.get("instructor"),
+                # "credits": md.get("credits"),
                 # add brief/description here if you have a short one
             })
 
