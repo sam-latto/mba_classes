@@ -65,41 +65,51 @@ def search():
 
     # 2) Query Supabase
        # 2) Query Supabase (safe)
+    # --- Direct REST call to Supabase (bypasses SDK to avoid proxy mismatch) ---
+    import os, requests
+    SUPABASE_URL = os.getenv("SUPABASE_URL")
+    API_KEY = (
+        os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        or os.getenv("SUPABASE_ANON_KEY")
+        or os.getenv("SUPABASE_KEY")
+    )
+    if not SUPABASE_URL or not API_KEY:
+        return err("Missing SUPABASE_URL or API key", 500, int((time.time() - start) * 1000))
+
+    table = "courses"  # change if your table has a different name
+
+    # Build PostgREST filter: title ilike %q%
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    headers = {
+        "apikey": API_KEY,
+        "Authorization": f"Bearer {API_KEY}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal",
+    }
+    params = {
+        "select": "course_id,title,instructor,credits",
+        "title": f"ilike.*{q}*",
+        "limit": k,
+    }
+
     try:
-        sb = get_supabase()
-        table = get_table_name()
-
-        # EITHER call your helper (if its signature is (sb, table, query, limit)):
-        rows = search_courses_by_title(sb, table, q, k)
-
-        # --- If that still errors, comment the line above and uncomment the inline fallback below ---
-        # res = (
-        #     sb.table(table)
-        #       .select("course_id,title,instructor,credits")
-        #       .ilike("title", f"%{q}%")   # adjust to your schema (title/keywords/etc.)
-        #       .limit(k)
-        #       .execute()
-        # )
-        # rows = res.data or []
-
+        r = requests.get(url, headers=headers, params=params, timeout=15)
+        r.raise_for_status()
+        rows = r.json()
     except Exception as e:
-        app.logger.exception("SEARCH_FAILED")
-        took_ms = int((time.time() - start) * 1000)
-        return err(f"Search failed: {e}", status=500, took_ms=took_ms)
+        return err(f"Search failed (REST): {e}", 500, int((time.time() - start) * 1000))
 
-    # 3) Shape response to your contract
     results = []
-    for r in rows:
+    for r_ in rows or []:
         results.append({
-            "course_id": r.get("course_id"),
-            "title": r.get("title"),
-            "score": 1.0,           # placeholder; we’ll add better scoring later
-            "reasons": [],          # placeholder; we’ll add “why it matched” later
-            "metadata": {
-                "instructor": r.get("instructor"),
-                "credits": r.get("credits"),
-            }
+            "course_id": r_.get("course_id"),
+            "title": r_.get("title"),
+            "score": 1.0,
+            "reasons": [],
+            "metadata": {"instructor": r_.get("instructor"), "credits": r_.get("credits")},
         })
+
 
     took_ms = int((time.time() - start) * 1000)
     return ok({"results": results}, status=200, took_ms=took_ms)
