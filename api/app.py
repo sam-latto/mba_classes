@@ -160,153 +160,117 @@ def parse_json_safely(text: str):
 def recommend():
     start = time.time()
 
-    # 1) Validate JSON
-   # Parse JSON
+    # --- Parse & validate body ---
     try:
         body = request.get_json(force=True, silent=False) or {}
     except Exception:
-        return err("Request body must be valid JSON", 400, int((time.time()-start)*1000))
+        return err("Request body must be valid JSON", 400, int((time.time() - start) * 1000))
 
-    # Accept either "q" or "query"
-    user_q = (body.get("q") or body.get("query") or "").strip()
-
-    # Accept either "courses" (list of IDs) OR "results" (list of objects with course_id)
-    courses = body.get("courses")
-    results = body.get("results")
-
-    course_ids = []
-    if isinstance(courses, list) and all(isinstance(x, str) for x in courses):
-        course_ids = courses
-    elif isinstance(results, list):
-        for item in results:
-            if isinstance(item, dict) and "course_id" in item and isinstance(item["course_id"], str):
-                course_ids.append(item["course_id"])
-
-
+    intent = (body.get("q") or body.get("query") or "").strip()
     try:
         top_k = int(body.get("top_k", 5))
     except Exception:
         top_k = 5
-    top_k = max(1, min(top_k, 25))  # keep between 1–25
+    top_k = max(1, min(top_k, 25))  # clamp 1–25
 
-    # Validate
-    if not user_q:
-        return err("Missing or invalid 'q'/'query'", 400, int((time.time()-start)*1000))
-    if not course_ids:
-        return err("Missing or invalid 'courses' or 'results' (need course IDs)", 400, int((time.time()-start)*1000))
+    if not intent:
+        return err("Missing or invalid 'q'/'query'", 400, int((time.time() - start) * 1000))
 
-    # 3) Normalize candidates (only keep the fields we need)
+    raw_courses = body.get("courses")
+    raw_results = body.get("results")
+
+    # --- Normalize candidates from either 'results' or 'courses' ---
     candidates = []
-    seen_ids = set()
-    for item in results:
-        cid = (item or {}).get("course_id")
-        title = (item or {}).get("title")
-        if not cid or not title or cid in seen_ids:
-            continue
-        seen_ids.add(cid)
-        candidates.append({
-            "course_id": cid,
-            "title": title,
-            "metadata": (item or {}).get("metadata", {})  # instructor/credits/etc.
-        })
+    seen = set()
 
-    # 4) Early return on empty candidates (contract says 200 with empty recommendations)
+    # Prefer 'results' (objects with course_id + title)
+    if isinstance(raw_results, list):
+        for item in raw_results:
+            if not isinstance(item, dict):
+                continue
+            cid = (item.get("course_id") or "").strip()
+            title = (item.get("title") or "").strip()
+            if cid and title and cid not in seen:
+                seen.add(cid)
+                candidates.append({"course_id": cid, "title": title})
+
+    # If only 'courses' (ids) were provided, make minimal candidates
+    if isinstance(raw_courses, list):
+        for cid in raw_courses:
+            if isinstance(cid, str):
+                cid = cid.strip()
+                if cid and cid not in seen:
+                    seen.add(cid)
+                    candidates.append({"course_id": cid, "title": f"{cid} (title unknown)"})
+
+    # Contract: if no valid candidates, return 200 with empty list
     if not candidates:
-        took_ms = int((time.time() - start) * 1000)
-        return ok({"recommendations": []}, status=200, took_ms=took_ms)
+        return ok({"recommendations": []}, 200, int((time.time() - start) * 1000))
 
+    # Token control: cap to 10 and slim fields
+    candidates = candidates[:10]
+    allowed_ids = [c["course_id"] for c in candidates]
+    slim = [{"course_id": c["course_id"], "title": c["title"]} for c in candidates]
 
-
-
-
-
-
-    # 0) Early return if no candidates
-    if not candidates:
-        took_ms = int((time.time() - start) * 1000)
-        return ok({"recommendations": []}, status=200, took_ms=took_ms)
-
-    # 1) Cap and slim candidates for token control
-    allowed_ids = []
-    slim = []
-    for c in candidates[:10]:  # cap to 10
-        cid = c.get("course_id")
-        title = c.get("title")
-        md = c.get("metadata") or {}
-        if cid and title:
-            allowed_ids.append(cid)
-            slim.append({
-                "course_id": cid,
-                "title": title,
-                # keep only small, useful bits
-                # "instructor": md.get("instructor"),
-                # "credits": md.get("credits"),
-                # add brief/description here if you have a short one
-            })
-
-    candidates_json = json.dumps(slim, ensure_ascii=False)
-
+    # --- Build prompts ---
     system_prompt = (
         "You recommend MBA courses ONLY from the provided candidates.\n"
-        "Return STRICT JSON: an array of objects with keys: "
+        "Return STRICT JSON with key 'recommendations': an array of objects with keys:\n"
         "course_id (string), rationale (<=2 sentences), confidence (0.0–1.0).\n"
         "NEVER invent a course_id not in candidates. If unsure, return []."
     )
+    user_payload = {
+        "intent": intent,
+        "top_k": top_k,
+        "candidates": slim,  # [{course_id, title}]
+    }
 
-    user_prompt = (
-        f"query: {user_q}\n"
-        f"top_k: {top_k}\n"
-        f"CANDIDATES(JSON): {candidates_json}\n\n"
-        "Return ONLY JSON. No prose."
-    )
-
-    # 2) Call the model
+    # --- Call OpenAI in JSON mode for reliable parsing ---
     try:
-        response = client.chat.completions.create(
-        model="gpt-4o-mini",  # or another chat-capable model you have access to
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=0.2,
-        top_p=1.0,
-        max_tokens=500,
-    )
-        raw = response.choices[0].message.content if response and response.choices else "[]"
+        resp = client.chat.completions.create(
+            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            temperature=0.2,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+            ],
+            timeout=20,
+            max_tokens=600,
+        )
+        content = (resp.choices[0].message.content or "").strip()
+        obj = json.loads(content) if content else {}
+        recs = obj.get("recommendations", [])
+        if not isinstance(recs, list):
+            recs = []
     except Exception:
-        try:
-            app.logger.exception("OpenAI call failed")
-        except Exception:
-            pass
-        raw = "[]"
+        app.logger.exception("OpenAI call failed")
+        recs = []
 
-
-    # 3) Parse + enforce whitelist + cap to top_k
-    recs = parse_json_safely(raw)
-    allowed_set = set(allowed_ids)
-    filtered = []
-    for r in (recs if isinstance(recs, list) else []):
-        cid = (r or {}).get("course_id")
-        rationale = (r or {}).get("rationale")
-        conf = (r or {}).get("confidence", 0.6)
-        if cid in allowed_set and isinstance(rationale, str) and rationale.strip():
+    # --- Validate, whitelist, and trim ---
+    allowed = set(allowed_ids)
+    cleaned = []
+    for r in recs:
+        if not isinstance(r, dict):
+            continue
+        cid = (r.get("course_id") or "").strip()
+        rationale = (r.get("rationale") or "").strip()
+        if cid in allowed and rationale:
             try:
-                conf = float(conf)
+                conf = float(r.get("confidence", 0.6))
             except Exception:
                 conf = 0.6
-            filtered.append({
+            cleaned.append({
                 "course_id": cid,
-                "rationale": rationale.strip()[:400],  # keep it tight
+                "rationale": rationale[:400],
                 "confidence": max(0.0, min(1.0, conf)),
             })
-        if len(filtered) >= top_k:
-            break
 
-    recommendations = filtered
+    # Keep model order (already ranked) but enforce top_k
+    recommendations = cleaned[:top_k]
 
-    # 4) Return
-    took_ms = int((time.time() - start) * 1000)
-    return ok({"recommendations": recommendations}, status=200, took_ms=took_ms)
+    return ok({"recommendations": recommendations}, 200, int((time.time() - start) * 1000))
+
 
 
 
