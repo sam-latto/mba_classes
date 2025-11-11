@@ -40,6 +40,7 @@ def health():
     return ok({"ok": True}, status=200)
 
 # --- Example pattern we’ll use for /search soon ---
+@app.post("/search")
 def search():
     start = time.time()
 
