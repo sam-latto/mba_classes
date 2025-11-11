@@ -4,11 +4,5 @@ python-dotenv==1.0.1
 openai==2.1.0
 flask-cors==4.0.0
 
-# Supabase stack (versions compatible with Python 3.13)
 supabase==2.4.0
-httpx==0.27.2
-postgrest==2.24.0
-gotrue==2.5.4
-realtime==2.0.2
-storage3==0.7.7
-
+httpx==0.25.2
