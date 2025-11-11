@@ -64,9 +64,28 @@ def search():
         return err("Invalid 'k' value (must be 1–25)", status=422, took_ms=int((time.time()-start)*1000))
 
     # 2) Query Supabase
-    sb = get_supabase()
-    table = get_table_name()
-    rows = search_courses_by_title(sb, table, q, k)
+       # 2) Query Supabase (safe)
+    try:
+        sb = get_supabase()
+        table = get_table_name()
+
+        # EITHER call your helper (if its signature is (sb, table, query, limit)):
+        rows = search_courses_by_title(sb, table, q, k)
+
+        # --- If that still errors, comment the line above and uncomment the inline fallback below ---
+        # res = (
+        #     sb.table(table)
+        #       .select("course_id,title,instructor,credits")
+        #       .ilike("title", f"%{q}%")   # adjust to your schema (title/keywords/etc.)
+        #       .limit(k)
+        #       .execute()
+        # )
+        # rows = res.data or []
+
+    except Exception as e:
+        app.logger.exception("SEARCH_FAILED")
+        took_ms = int((time.time() - start) * 1000)
+        return err(f"Search failed: {e}", status=500, took_ms=took_ms)
 
     # 3) Shape response to your contract
     results = []
