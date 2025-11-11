@@ -6,9 +6,8 @@ from openai import OpenAI
 from flask_cors import CORS
 from dotenv import load_dotenv
 import re
-from .services.supabase_client import (
-    get_supabase, get_table_name, search_courses_by_title
-)
+from api.services.supabase_client import get_supabase, get_table_name, search_courses_by_title
+
 
 
 # --- App & Config ---
@@ -67,7 +66,7 @@ def search():
     # 2) Query Supabase
     sb = get_supabase()
     table = get_table_name()
-    rows = search_courses_by_title(sb, table, query, k)
+    rows = search_courses_by_title(sb, table, q, k)
 
     # 3) Shape response to your contract
     results = []
