@@ -5,6 +5,7 @@ import json
 from openai import OpenAI
 from flask_cors import CORS
 from dotenv import load_dotenv
+from flask import send_from_directory
 import re
 from api.services.supabase_client import get_supabase, get_table_name, search_courses_by_title
 
@@ -13,7 +14,7 @@ from api.services.supabase_client import get_supabase, get_table_name, search_co
 # --- App & Config ---
 client = OpenAI()
 load_dotenv()  # reads .env in development
-app = Flask(__name__)
+app = Flask(__name__, static_folder="static", static_url_path="")
 print("Launching app from:", __file__)
 print("Routes at startup:", app.url_map)
 
@@ -287,6 +288,9 @@ def __routes():
     return "\n".join(sorted(lines)), 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 
+@app.route("/")
+def home():
+    return app.send_static_file("index.html")
 
 
 # --- Run the app ---
