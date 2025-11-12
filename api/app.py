@@ -18,7 +18,10 @@ print("Launching app from:", __file__)
 print("Routes at startup:", app.url_map)
 
 
-CORS(app, resources={r"/*": {"origins": "*"}})  # relax in dev; tighten later
+# CORS(app, resources={r"/*": {"origins": "*"}})  # relax in dev; tighten later
+# pip install flask-cors
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=False)
+
 
 # Simple helper to make consistent JSON responses
 def ok(data=None, status=200, took_ms=None):
