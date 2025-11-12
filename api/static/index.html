@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Ross Course Recommender (MVP)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { --bg:#0b0f14; --card:#121922; --muted:#94a3b8; --text:#e6edf3; --accent:#4f9cf9; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+           background: var(--bg); color: var(--text); }
+    .wrap { max-width: 900px; margin: 40px auto; padding: 0 16px; }
+    h1 { font-size: 22px; letter-spacing: .2px; }
+    .card { background: var(--card); border-radius: 16px; padding: 18px; box-shadow: 0 8px 28px rgba(0,0,0,.35); }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    label { font-size: 12px; color: var(--muted); display:block; margin-bottom:6px; }
+    input, textarea, select { width: 100%; background: #0f1520; color: var(--text);
+      border: 1px solid #1e2633; border-radius: 10px; padding: 10px 12px; outline: none; }
+    textarea { min-height: 90px; resize: vertical; }
+    button { background: var(--accent); color: #06131f; border: 0; padding: 12px 14px; border-radius: 12px;
+      font-weight: 600; cursor: pointer; }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    .row { display:flex; gap: 12px; align-items: center; }
+    .mt { margin-top: 14px; }
+    .results { margin-top: 18px; display: grid; gap: 12px; }
+    .rec { background:#0f1520; border:1px solid #1e2633; border-radius: 12px; padding: 12px; }
+    .cid { font-weight: 700; }
+    .small { color: var(--muted); font-size: 12px; }
+    .err { color: #ff6b6b; font-size: 13px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Ross Course Recommender — MVP</h1>
+    <div class="card">
+      <div class="grid">
+        <div>
+          <label for="query">Career goal / query</label>
+          <input id="query" placeholder="e.g., product management" value="product management" />
+        </div>
+        <div>
+          <label for="topk">Top K</label>
+          <select id="topk">
+            <option>1</option><option selected>3</option><option>5</option><option>10</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="mt">
+        <label for="courses">Courses (IDs)</label>
+        <input id="courses" placeholder='e.g., TO-653,MKT-620' value="TO-653,MKT-620" />
+      </div>
+
+      <div class="mt">
+        <label for="results">Results (optional JSON array)</label>
+        <textarea id="results" placeholder='[{"course_id":"TO-653","title":"Designing and Managing the Product Lifecycle"},{"course_id":"MKT-620","title":"Marketing Strategy for Competitive Advantage"}]' ></textarea>
+        <div class="small">Provide either <b>courses</b> (comma list) or <b>results</b> (JSON). If both exist, results win.</div>
+      </div>
+
+      <div class="row mt">
+        <button id="go">Get recommendations</button>
+        <div id="status" class="small"></div>
+      </div>
+
+      <div id="error" class="err"></div>
+      <div id="out" class="results"></div>
+    </div>
+  </div>
+
+  <script>
+    const API = "https://ross-course-recommender.onrender.com/recommend";
+    const el = (id) => document.getElementById(id);
+
+    function parseResultsJSON(txt) {
+      if (!txt.trim()) return null;
+      try {
+        const obj = JSON.parse(txt);
+        if (Array.isArray(obj)) return obj;
+        if (obj && Array.isArray(obj.results)) return obj.results;
+        return obj;
+      } catch {
+        return "__INVALID_JSON__";
+      }
+    }
+
+    async function recommend() {
+      el("error").textContent = "";
+      el("out").innerHTML = "";
+      el("status").textContent = "Calling API...";
+      el("go").disabled = true;
+
+      const query = el("query").value.trim();
+      const top_k = parseInt(el("topk").value, 10);
+      const coursesCSV = el("courses").value.trim();
+      const resultsRaw = el("results").value;
+
+      const resultsParsed = parseResultsJSON(resultsRaw);
+      if (resultsParsed === "__INVALID_JSON__") {
+        el("status").textContent = "";
+        el("go").disabled = false;
+        el("error").textContent = "Results JSON is invalid.";
+        return;
+      }
+
+      const body = {};
+      if (resultsParsed && Array.isArray(resultsParsed)) {
+        body.results = resultsParsed;
+      } else if (coursesCSV) {
+        body.courses = coursesCSV.split(",").map(s => s.trim()).filter(Boolean);
+      }
+      body.q = query;
+      body.top_k = top_k;
+
+      const t0 = performance.now();
+      try {
+        const resp = await fetch(API, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = await resp.json();
+        const took = Math.round(performance.now() - t0);
+        el("status").textContent = `Done in ${took} ms`;
+
+        if (!resp.ok) {
+          el("error").textContent = (data && (data.error || data.detail)) || "Request failed";
+          return;
+        }
+
+        const recs = (data && data.recommendations) || [];
+        if (!recs.length) {
+          el("out").innerHTML = `<div class="small">No recommendations returned.</div>`;
+          return;
+        }
+
+        el("out").innerHTML = recs.map(r => `
+          <div class="rec">
+            <div class="cid">${r.course_id}</div>
+            <div class="small">Confidence: ${typeof r.confidence === "number" ? r.confidence.toFixed(2) : r.confidence}</div>
+            <div>${r.rationale || ""}</div>
+          </div>
+        `).join("");
+      } catch (e) {
+        el("status").textContent = "";
+        el("error").textContent = "Network or CORS error: " + e.message;
+      } finally {
+        el("go").disabled = false;
+      }
+    }
+
+    el("go").addEventListener("click", recommend);
+  </script>
+</body>
+</html>
