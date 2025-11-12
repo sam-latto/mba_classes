@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from flask import send_from_directory
 import re
 from api.services.supabase_client import get_supabase, get_table_name, search_courses_by_title
+import requests
 
 
 
@@ -15,6 +16,68 @@ from api.services.supabase_client import get_supabase, get_table_name, search_co
 client = OpenAI()
 load_dotenv()  # reads .env in development
 app = Flask(__name__, static_folder="static", static_url_path="")
+# Simple mapping: profession -> skills/keywords for search
+PROFESSION_PROFILES = {
+    "product manager": {
+        "aliases": ["pm", "product management"],
+        "skills": [
+            "product strategy",
+            "customer discovery",
+            "roadmapping",
+            "experimentation",
+            "A/B testing",
+            "agile",
+            "user research",
+            "data-driven decision making",
+            "digital product",
+            "innovation"
+        ]
+    }
+    # We'll add more professions later
+}
+
+def normalize_profession_name(raw: str) -> str | None:
+    """
+    Map a user-provided profession string to one of our canonical keys
+    (e.g., "pm" -> "product manager").
+    """
+    if not raw:
+        return None
+    s = raw.strip().lower()
+    for name, profile in PROFESSION_PROFILES.items():
+        if s == name:
+            return name
+        if s in profile.get("aliases", []):
+            return name
+    return None
+
+
+def build_intent_from_profession(profession: str, extra_goal: str | None = None) -> str:
+    """
+    Turn a profession into a simple query string that FTS can handle.
+    For now, keep it very close to what we already know works.
+    """
+    canonical = normalize_profession_name(profession)
+    if not canonical:
+        # If we don't recognize it, just fall back to the raw text
+        base = profession.strip()
+        if extra_goal:
+            base += " " + extra_goal.strip()
+        return base
+
+    # For "product manager", we know "product management" works well with FTS
+    if canonical == "product manager":
+        base = "product management"
+    else:
+        base = canonical
+
+    if extra_goal:
+        base += " " + extra_goal.strip()
+
+    return base
+
+
+
 print("Launching app from:", __file__)
 print("Routes at startup:", app.url_map)
 
@@ -22,6 +85,68 @@ print("Routes at startup:", app.url_map)
 # CORS(app, resources={r"/*": {"origins": "*"}})  # relax in dev; tighten later
 # pip install flask-cors
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=False)
+
+# --- Supabase config for FTS-based candidate retrieval ---
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = (
+    os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    or os.getenv("SUPABASE_ANON_KEY")
+    or os.getenv("SUPABASE_KEY")
+)
+
+SB_HDR = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type": "application/json",
+}
+print("DEBUG SUPABASE_URL:", SUPABASE_URL)
+print("DEBUG SUPABASE_KEY present:", bool(SUPABASE_KEY))
+
+
+def retrieve_candidates_fts(intent: str, want: int):
+    """
+    Minimal FTS helper: call Supabase ft_search and just return [{course_id, title=course_id}]
+    so we can see if Supabase is sending back anything at all.
+    """
+    print("DEBUG FTS: starting with intent =", repr(intent), "want =", want)
+    print("DEBUG FTS: URL =", SUPABASE_URL, "KEY present =", bool(SUPABASE_KEY))
+
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        print("DEBUG FTS: missing SUPABASE_URL or SUPABASE_KEY, returning [].")
+        return []
+
+    want = max(int(want or 10), 1)
+
+    # 1) Call ft_search RPC
+    try:
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/ft_search",
+            headers=SB_HDR,
+            json={"q": intent, "match_count": want},
+            timeout=10,
+        )
+        print("DEBUG FTS: ft_search status:", r.status_code)
+        print("DEBUG FTS: ft_search raw body:", r.text[:500])
+        r.raise_for_status()
+        hits = r.json() or []
+        print("DEBUG FTS: ft_search parsed hits:", hits)
+    except Exception as e:
+        print("DEBUG FTS: ERROR calling ft_search:", repr(e))
+        return []
+
+    ids = [h.get("course_id") for h in hits if h.get("course_id")]
+    print("DEBUG FTS: extracted ids:", ids)
+
+    if not ids:
+        print("DEBUG FTS: no ids found in hits, returning [].")
+        return []
+
+    # For now, don't bother with a second query; just return ids as candidates
+    candidates = [{"course_id": cid, "title": cid} for cid in ids]
+    print("DEBUG FTS: final candidates:", candidates)
+    return candidates
+
+
 
 
 # Simple helper to make consistent JSON responses
@@ -169,8 +294,17 @@ def recommend():
         body = request.get_json(force=True, silent=False) or {}
     except Exception:
         return err("Request body must be valid JSON", 400, int((time.time() - start) * 1000))
+   
+    # ---- Step 2: Extract profession + build intent if needed ----
+    profession = (body.get("profession") or "").strip()
+    goal = (body.get("goal") or "").strip()
 
     intent = (body.get("q") or body.get("query") or "").strip()
+
+    # if no q/query provided, use profession-based intent
+    if not intent and profession:
+        intent = build_intent_from_profession(profession, goal)
+   
     try:
         top_k = int(body.get("top_k", 5))
     except Exception:
@@ -178,7 +312,12 @@ def recommend():
     top_k = max(1, min(top_k, 25))  # clamp 1–25
 
     if not intent:
-        return err("Missing or invalid 'q'/'query'", 400, int((time.time() - start) * 1000))
+        return err(
+        "Missing intent: provide 'q'/'query' or 'profession'",
+        400,
+        int((time.time() - start) * 1000),
+    )
+
 
     raw_courses = body.get("courses")
     raw_results = body.get("results")
@@ -207,9 +346,27 @@ def recommend():
                     seen.add(cid)
                     candidates.append({"course_id": cid, "title": f"{cid} (title unknown)"})
 
-    # Contract: if no valid candidates, return 200 with empty list
+    # If neither 'results' nor 'courses' provided anything,
+    # fall back to full-text search over all courses using `intent`.
+    if not candidates:
+        try:
+            candidates = retrieve_candidates_fts(intent, top_k)
+        except Exception:
+            app.logger.exception("FTS retrieval failed")
+            candidates = []
+
+    # Now log what happened and bail if still empty
+    if not candidates:
+        app.logger.info(f"FTS returned no candidates for intent={intent!r}")
+        return ok({"recommendations": []}, 200, int((time.time() - start) * 1000))
+    else:
+        app.logger.info(f"FTS candidates for intent={intent!r}: {candidates}")
+
+
+    # Contract: if still no candidates, return 200 with empty list
     if not candidates:
         return ok({"recommendations": []}, 200, int((time.time() - start) * 1000))
+
 
     # Token control: cap to 10 and slim fields
     candidates = candidates[:10]
